@@ -7,9 +7,10 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import "./IStakingRewards.sol";
 import "./RewardsDistributionRecipient.sol";
 import "./Pausable.sol";
+import {console} from "forge-std/console.sol";
 
 // https://docs.synthetix.io/contracts/source/contracts/stakingrewards
-contract StakingRewards is
+contract StakingRewards2 is
     IStakingRewards,
     RewardsDistributionRecipient,
     ReentrancyGuard,
@@ -26,8 +27,7 @@ contract StakingRewards is
     uint256 public lastUpdateTime;
     uint256 public rewardPerTokenStored;
 
-    mapping(address => uint256) public userRewardPerTokenPaid;
-    mapping(address => uint256) public rewards;
+    mapping(address => uint256) public rewardDebt;
 
     uint256 private _totalSupply;
     mapping(address => uint256) private _balances;
@@ -70,14 +70,6 @@ contract StakingRewards is
             _totalSupply;
     }
 
-    function earned(address account) public view returns (uint256) {
-        return
-            (_balances[account] *
-                (rewardPerToken() - userRewardPerTokenPaid[account])) /
-            1e18 +
-            rewards[account];
-    }
-
     function getRewardForDuration() external view returns (uint256) {
         return rewardRate * rewardsDuration;
     }
@@ -86,7 +78,7 @@ contract StakingRewards is
 
     function stake(
         uint256 amount
-    ) external nonReentrant notPaused updateReward(msg.sender) {
+    ) external nonReentrant notPaused updateRewardStaking(msg.sender, amount) {
         require(amount > 0, "Cannot stake 0");
         _totalSupply += amount;
         _balances[msg.sender] += amount;
@@ -104,18 +96,13 @@ contract StakingRewards is
         emit Withdrawn(msg.sender, amount);
     }
 
-    function getReward() public nonReentrant updateReward(msg.sender) {
-        uint256 reward = rewards[msg.sender];
-        if (reward > 0) {
-            rewards[msg.sender] = 0;
-            rewardsToken.safeTransfer(msg.sender, reward);
-            emit RewardPaid(msg.sender, reward);
-        }
-    }
+    function getReward() public nonReentrant updateReward(msg.sender) {}
 
     function exit() external {
         withdraw(_balances[msg.sender]);
-        getReward();
+    }
+    function earned(address account) external view returns (uint256) {
+        return rewardDebt[account];
     }
 
     /* ========== RESTRICTED FUNCTIONS ========== */
@@ -174,8 +161,33 @@ contract StakingRewards is
         rewardPerTokenStored = rewardPerToken();
         lastUpdateTime = lastTimeRewardApplicable();
         if (account != address(0)) {
-            rewards[account] = earned(account);
-            userRewardPerTokenPaid[account] = rewardPerTokenStored;
+            uint256 cumulativeRewards = (_balances[account] *
+                rewardPerToken()) / 1e18;
+            uint256 reward = cumulativeRewards - rewardDebt[account];
+            rewardDebt[account] = cumulativeRewards;
+            if (reward > 0) {
+                rewardsToken.safeTransfer(account, reward);
+                emit RewardPaid(account, reward);
+            }
+        }
+        _;
+    }
+    modifier updateRewardStaking(address account, uint256 amount) {
+        rewardPerTokenStored = rewardPerToken();
+        lastUpdateTime = lastTimeRewardApplicable();
+        if (account != address(0)) {
+            if (rewardDebt[account] == 0) {
+                rewardDebt[account] = (amount * rewardPerToken()) / 1e18;
+            } else {
+                uint256 cumulativeRewards = (_balances[account] *
+                    rewardPerToken()) / 1e18;
+                uint256 reward = cumulativeRewards - rewardDebt[account];
+                rewardDebt[account] = cumulativeRewards;
+                if (reward > 0) {
+                    rewardsToken.safeTransfer(account, reward);
+                    emit RewardPaid(account, reward);
+                }
+            }
         }
         _;
     }
